@@ -6,10 +6,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/index.ts"
+    "start": "node dist/server.js",
+    "dev": "nodemon --watch 'src/**/*.ts' --exec 'ts-node' src/server.ts"
   },
-  
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -21,6 +20,9 @@
   },
   "dependencies": {
     "@types/express": "^5.0.3",
-    "express": "^5.1.0"
+    "@types/pg": "^8.15.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
   }
 }
