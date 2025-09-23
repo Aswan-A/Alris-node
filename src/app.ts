@@ -13,4 +13,12 @@ app.use('/auth', authRoutes);
 app.use('/reports', reportsRoutes);
 app.use('/issues', issuesRoutes);
 app.use('/authority',authorityRoutes)
+
+app.get('/', (req, res) => {
+  res.send('Welcome to the Issue Reporting System API');
+});
+app.get('/health', (req, res) => {
+  res.send('OK');
+});
+
 export default app;
