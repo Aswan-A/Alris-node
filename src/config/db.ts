@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 declare global {
+  // avoid re-instantiating pool in dev hot-reload
   var pgPool: Pool | undefined;
 }
 
