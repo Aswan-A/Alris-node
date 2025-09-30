@@ -7,7 +7,7 @@ import {
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/roles.js';
 
-const router : Router= Router();
+const router = Router();
 
 router.post('/register-lower', authMiddleware, requireRole('higher'), registerLowerAuthority);
 

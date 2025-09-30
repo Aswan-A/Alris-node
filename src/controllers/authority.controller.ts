@@ -3,15 +3,6 @@ import bcrypt from 'bcrypt';
 import { pool } from '../config/db.js';
 import { generateAccessToken, generateRefreshToken } from '../utils/jwt.js';
 
-// Generate random alphanumeric password
-function generateRandomPassword(length: number): string {
-  const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let password = '';
-  for (let i = 0; i < length; i++) {
-    password += charset.charAt(Math.floor(Math.random() * charset.length));
-  }
-  return password;
-}
 
 /**
  * Higher authority registers lower authority
@@ -19,28 +10,45 @@ function generateRandomPassword(length: number): string {
  */
 export async function registerLowerAuthority(req: Request, res: Response) {
   const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email is required' });
+  const user = (req as any).user; 
+  const department = user?.department;
 
-  const tempPassword = generateRandomPassword(6);
-  const hashedPassword = await bcrypt.hash(tempPassword, 10);
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  if (!department) {
+    return res.status(400).json({ error: 'Department missing from higher authority token' });
+  }
 
   try {
+    // Generate password from first 6 letters of email
+    let tempPassword = email.slice(0, 6);
+    if (tempPassword.length < 6) {
+      tempPassword = tempPassword.padEnd(6, '0');
+    }
+
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
     const { rows } = await pool.query(
-      `INSERT INTO authorities (email, password_hash, is_initialized, latitude, longitude, location, department)
-       VALUES ($1, $2, false, 0, 0, ST_SetSRID(ST_MakePoint(0,0),4326), '')
-       RETURNING id, email`,
-      [email, hashedPassword]
+      `INSERT INTO authorities (email, password_hash, department)
+       VALUES ($1, $2, $3)
+       RETURNING id, email, department`,
+      [email, hashedPassword, department]
     );
 
     res.status(201).json({
       message: 'Lower authority registered successfully',
       authority: rows[0],
-      tempPassword
+      tempPassword, // return so higher authority can share with them
     });
   } catch (err: any) {
-    res.status(400).json({ error: 'Error registering lower authority', details: err.message });
+    res.status(400).json({
+      error: 'Error registering lower authority',
+      details: err.message,
+    });
   }
 }
+
 
 /**
  * Authority login (lower or higher)
@@ -48,35 +56,60 @@ export async function registerLowerAuthority(req: Request, res: Response) {
  */
 export async function loginAuthority(req: Request, res: Response) {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
 
   try {
-    const { rows } = await pool.query(`SELECT * FROM authorities WHERE email=$1`, [email]);
-    if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+    let query = `SELECT id, email, password_hash, department FROM higherauthorities WHERE email = $1`;
+    let { rows } = await pool.query(query, [email]);
 
-    const authority = rows[0];
-    const match = await bcrypt.compare(password, authority.password_hash);
-    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+    let role: 'higher' | 'authority' | null = null;
+    let user = rows[0];
 
-    const role = authority.is_initialized ? 'authority' : 'authority';
-    const payload = { id: authority.id, email: authority.email, role };
+    if (user) {
+      role = 'higher';
+    } else {
+      query = `SELECT id, email, password_hash, department FROM authorities WHERE email = $1`;
+      ({ rows } = await pool.query(query, [email]));
+      user = rows[0];
+      if (user) role = 'authority';
+    }
+
+    if (!user || !role) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const payload = { id: user.id, role, department: user.department };
     const accessToken = generateAccessToken(payload);
     const refreshToken = generateRefreshToken(payload);
 
-    await pool.query(`INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)`, [
-      authority.id,
-      refreshToken
-    ]);
+    await pool.query(
+      `INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)`,
+      [user.id, refreshToken]
+    );
 
     res.json({
+      message: 'Login successful',
       accessToken,
       refreshToken,
-      is_initialized: authority.is_initialized
+      user: {
+        id: user.id,
+        email: user.email,
+        role,
+        department: user.department,
+      },
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Login failed', details: err.message });
+    res.status(500).json({ error: 'Login error', details: err.message });
   }
 }
+
 
 /**
  * Lower authority updates profile and password

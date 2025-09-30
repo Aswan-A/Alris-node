@@ -4,7 +4,7 @@ import authRoutes from './routes/auth.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
 import issuesRoutes from './routes/issues.routes.js';
 import authorityRoutes from './routes/authority.routes.js';
-const app : Application= express();
+const app = express();
 
 app.use(cors());
 app.use(express.json());

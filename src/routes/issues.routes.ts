@@ -3,7 +3,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/roles.js';
 import { getNearbyIssues, getDepartmentIssues } from '../controllers/issues.controller.js';
 
-const router : Router= Router();
+const router = Router();
 
 router.get('/nearby', authMiddleware, requireRole('authority'), getNearbyIssues);
 router.get('/department', authMiddleware, requireRole('higher'), getDepartmentIssues);

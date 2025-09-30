@@ -3,7 +3,7 @@ import multer from 'multer';
 import { authMiddleware } from '../middleware/auth.js';
 import { createReport, getMyReports } from '../controllers/reports.controller.js';
 
-const router : Router = Router();
+const router  = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.post('/', authMiddleware, upload.array('files', 5), createReport);

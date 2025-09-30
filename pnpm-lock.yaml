@@ -48,6 +48,9 @@ importers:
       '@types/cors':
         specifier: ^2.8.19
         version: 2.8.19
+      '@types/express-serve-static-core':
+        specifier: ^5.0.7
+        version: 5.0.7
       '@types/jsonwebtoken':
         specifier: ^9.0.10
         version: 9.0.10
