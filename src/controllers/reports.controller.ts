@@ -7,13 +7,13 @@ export async function createReport(req: Request, res: Response) {
   try {
     const userId = (req as any).user.id;
     const { latitude, longitude, description } = req.body;
-    const files = (req as any).files as Express.Multer.File[];
+    const files = ((req as any).files as Express.Multer.File[]) || [];
 
     await client.query('BEGIN');
 
     const { rows: reportRows } = await client.query(
       `INSERT INTO reports (user_id, latitude, longitude, location, description)
-       VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($2, $3), 4326), $4)
+       VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), $4)
        RETURNING *`,
       [userId, latitude, longitude, description]
     );
@@ -61,6 +61,74 @@ export async function getMyReports(req: Request, res: Response) {
         r.description,
         r.is_classified,
         r.created_at,
+        -- Issue details if classified
+        json_build_object(
+          'id', i.id,
+          'department', i.department,
+          'category', i.category,
+          'status', i.status,
+          'created_at', i.created_at,
+          'updated_at', i.updated_at
+        ) AS issue,
+        -- Uploads
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', ru.id,
+              'url', ru.filename,  -- stored as Supabase public URL
+              'is_fake', ru.is_fake,
+              'is_spam', ru.is_spam,
+              'uploaded_at', ru.uploaded_at
+            )
+          ) FILTER (WHERE ru.id IS NOT NULL), '[]'
+        ) AS uploads
+      FROM reports r
+      LEFT JOIN report_uploads ru ON ru.report_id = r.id
+      LEFT JOIN issues i ON r.issue_id = i.id
+      WHERE r.user_id = $1
+      GROUP BY r.id, i.id
+      ORDER BY r.created_at DESC;
+      `,
+      [userId]
+    );
+
+    res.json({ reports });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({
+      error: 'Failed to fetch reports',
+      details: err.message,
+    });
+  }
+}
+
+
+export async function getReportById(req: Request, res: Response) {
+  const userId = (req as any).user.id;
+  const reportId = req.params.id;
+
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT 
+        r.id,
+        r.latitude,
+        r.longitude,
+        r.description,
+        r.is_classified,
+        r.created_at,
+        -- Issue details if classified
+        CASE WHEN r.is_classified THEN
+          json_build_object(
+            'id', i.id,
+            'department', i.department,
+            'category', i.category,
+            'status', i.status,
+            'created_at', i.created_at,
+            'updated_at', i.updated_at
+          )
+        ELSE NULL END AS issue,
+        -- Uploads
         COALESCE(
           json_agg(
             json_build_object(
@@ -74,16 +142,20 @@ export async function getMyReports(req: Request, res: Response) {
         ) AS uploads
       FROM reports r
       LEFT JOIN report_uploads ru ON ru.report_id = r.id
-      WHERE r.user_id = $1
-      GROUP BY r.id
-      ORDER BY r.created_at DESC;
+      LEFT JOIN issues i ON r.issue_id = i.id
+      WHERE r.id = $1 AND r.user_id = $2
+      GROUP BY r.id, i.id;
       `,
-      [userId]
+      [reportId, userId]
     );
 
-    res.json({ reports });
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+
+    res.json({ report: rows[0] });
   } catch (err: any) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch reports', details: err.message });
+    res.status(500).json({ error: 'Failed to fetch report', details: err.message });
   }
 }
