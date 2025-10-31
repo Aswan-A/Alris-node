@@ -1,4 +1,4 @@
-import { pool } from '../config/db.js';
+import { pool } from "../config/db.js";
 
 export async function initDb() {
   // USERS TABLE
@@ -17,14 +17,15 @@ export async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS authorities (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
+      name TEXT,  
       email TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       phone TEXT,
-      latitude DOUBLE PRECISION NOT NULL,
-      longitude DOUBLE PRECISION NOT NULL,
-      location geometry(Point, 4326) NOT NULL,
+      latitude DOUBLE PRECISION DEFAULT 0,  
+      longitude DOUBLE PRECISION DEFAULT 0,  
+      location geometry(Point, 4326) DEFAULT ST_SetSRID(ST_MakePoint(0, 0), 4326),
       department TEXT NOT NULL,
+      is_initialized BOOLEAN DEFAULT false,  
       created_at TIMESTAMP DEFAULT now()
     );
   `);
@@ -105,11 +106,11 @@ export async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+      user_id UUID ,
       token TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT now()
     );
   `);
 
-  console.log('✅ Database initialized');
+  console.log("✅ Database initialized");
 }
