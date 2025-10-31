@@ -112,5 +112,12 @@ export async function initDb() {
     );
   `);
 
+  await pool.query(`
+  CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON refresh_tokens(user_id);
+`);
+  await pool.query(`
+  CREATE INDEX IF NOT EXISTS refresh_tokens_token_idx ON refresh_tokens(token);
+`);
+
   console.log("✅ Database initialized");
 }

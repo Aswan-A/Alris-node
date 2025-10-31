@@ -70,7 +70,7 @@ export async function loginAuthority(req: Request, res: Response) {
     if (user) {
       role = 'higher';
     } else {
-      query = `SELECT id, email, password_hash, department FROM authorities WHERE email = $1`;
+      query = `SELECT id, email, password_hash, department, is_initialized FROM authorities WHERE email = $1`;
       ({ rows } = await pool.query(query, [email]));
       user = rows[0];
       if (user) role = 'authority';
@@ -103,6 +103,7 @@ export async function loginAuthority(req: Request, res: Response) {
         email: user.email,
         role,
         department: user.department,
+        is_initialized: role === 'authority' ? user.is_initialized : undefined, // ADDED
       },
     });
   } catch (err: any) {
@@ -116,10 +117,10 @@ export async function loginAuthority(req: Request, res: Response) {
  * After update, is_initialized = true
  */
 export async function updateAuthorityProfile(req: Request, res: Response) {
-  // Cast req to any to access user attached by authMiddleware
   const user = (req as any).user;
   const { id } = user;
-  const { name, phone, department, latitude, longitude, newPassword } = req.body;
+  // CHANGED: Removed department from destructuring
+  const { name, phone, latitude, longitude, newPassword } = req.body;
 
   try {
     let hashedPassword: string | undefined;
@@ -129,17 +130,16 @@ export async function updateAuthorityProfile(req: Request, res: Response) {
 
     const { rows } = await pool.query(
       `UPDATE authorities
-       SET name = COALESCE($1,name),
-           phone = COALESCE($2,phone),
-           department = COALESCE($3,department),
-           latitude = COALESCE($4,latitude),
-           longitude = COALESCE($5,longitude),
-           location = ST_SetSRID(ST_MakePoint(COALESCE($5,longitude), COALESCE($4,latitude)),4326),
-           password_hash = COALESCE($6,password_hash),
+       SET name = COALESCE($1, name),
+           phone = COALESCE($2, phone),
+           latitude = COALESCE($3, latitude),
+           longitude = COALESCE($4, longitude),
+           location = ST_SetSRID(ST_MakePoint(COALESCE($4, longitude), COALESCE($3, latitude)), 4326),
+           password_hash = COALESCE($5, password_hash),
            is_initialized = true
-       WHERE id=$7
-       RETURNING id,name,email,department,latitude,longitude,is_initialized`,
-      [name, phone, department, latitude, longitude, hashedPassword, id]
+       WHERE id = $6
+       RETURNING id, name, email, department, latitude, longitude, is_initialized`,
+      [name, phone, latitude, longitude, hashedPassword, id]
     );
 
     if (rows.length === 0) return res.status(404).json({ error: 'Authority not found' });
@@ -149,4 +149,3 @@ export async function updateAuthorityProfile(req: Request, res: Response) {
     res.status(500).json({ error: 'Error updating profile', details: err.message });
   }
 }
-

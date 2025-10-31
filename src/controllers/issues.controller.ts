@@ -52,19 +52,13 @@ export async function getNearbyIssues(req: Request, res: Response) {
 // Issues for higher authority by department
 export async function getDepartmentIssues(req: Request, res: Response) {
   try {
-    const higherId = (req as any).user.id;
+    const user = (req as any).user;
+    const department = user.department;
 
-    // Get higher authority department
-    const { rows: higherRows } = await pool.query(
-      `SELECT department FROM higherauthorities WHERE id = $1`,
-      [higherId]
-    );
-    if (higherRows.length === 0)
-      return res.status(404).json({ error: 'Higher authority not found' });
+    if (!department) {
+      return res.status(400).json({ error: 'Department not found in token' });
+    }
 
-    const { department } = higherRows[0];
-
-    // Get all classified reports for issues in this department
     const { rows: issues } = await pool.query(
       `
       SELECT 
