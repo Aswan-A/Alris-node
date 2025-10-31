@@ -18,21 +18,25 @@ export async function registerUser(req: Request, res: Response) {
 }
 
 export async function loginUser(req: Request, res: Response) {
-  const { email, password } = req.body;
-  const { rows } = await pool.query(`SELECT * FROM users WHERE email=$1`, [email]);
-  if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+  try {
+    const { email, password } = req.body;
+    const { rows } = await pool.query(`SELECT * FROM users WHERE email=$1`, [email]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
 
-  const user = rows[0];
-  const match = await bcrypt.compare(password, user.password_hash);
-  if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
-  const payload = { id: user.id, email: user.email, role: 'citizen' };
-  const accessToken = generateAccessToken(payload);
-  const refreshToken = generateRefreshToken(payload);
+    const payload = { id: user.id, email: user.email, role: 'citizen' };
+    const accessToken = generateAccessToken(payload);
+    const refreshToken = generateRefreshToken(payload);
 
-  await pool.query(`INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)`, [user.id, refreshToken]);
+    await pool.query(`INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)`, [user.id, refreshToken]);
 
-  res.json({ accessToken, refreshToken });
+    res.json({ accessToken, refreshToken });
+  } catch (err) {
+    res.status(500).json({ error: 'Login failed' });
+  }
 }
 
 export async function refreshToken(req: Request, res: Response) {
