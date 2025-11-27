@@ -12,7 +12,6 @@ const router = Router();
 router.get(
   "/nearby",
   authMiddleware,
-  requireRole("authority"),
   getNearbyIssues
 );
 router.get(
