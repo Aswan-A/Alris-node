@@ -9,7 +9,7 @@ import {
 
 const router = Router();
 
-router.get(
+router.post(
   "/nearby",
   authMiddleware,
   requireRole("citizen", "authority"),
