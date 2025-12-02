@@ -6,95 +6,127 @@ export async function getNearbyIssues(req: Request, res: Response) {
   const user = (req as any).user;
   const userId = user.id;
   const userRole = user.role;
-  
+
   const radiusKm = parseFloat(req.query.radius as string) || 10;
   const limit = parseInt(req.query.limit as string) || 50;
   const offset = parseInt(req.query.offset as string) || 0;
 
   let location: any;
-  let department: string;
+  let department: string | null = null;
 
   try {
-    if (userRole === 'authority') {
+ 
+    if (userRole === "authority") {
       const { rows: authRows } = await pool.query(
-        `SELECT location, department FROM authorities WHERE id=$1`, 
+        `SELECT location, department FROM authorities WHERE id=$1`,
         [userId]
       );
-      
+
       if (authRows.length === 0) {
-        return res.status(404).json({ error: 'Authority not found' });
+        return res.status(404).json({ error: "Authority not found" });
       }
 
-      location = authRows[0].location;
+      location = authRows[0].location; 
       department = authRows[0].department;
+    }
 
-    } else if (userRole === 'citizen') {
+ 
+    else if (userRole === "citizen") {
       const { latitude, longitude } = req.body;
-      department = req.query.department as string;
 
       if (!latitude || !longitude) {
-        return res.status(400).json({ 
-          error: 'Latitude and longitude are required in request body for citizens' 
+        return res.status(400).json({
+          error: "Latitude and longitude are required for citizens",
         });
       }
 
-      if (!department) {
-        return res.status(400).json({ 
-          error: 'Department is required as query parameter for citizens' 
-        });
-      }
-
-      const { rows: locationRows } = await pool.query(
+      const { rows: locRows } = await pool.query(
         `SELECT ST_SetSRID(ST_MakePoint($1, $2), 4326) AS location`,
-        [longitude, latitude]
+        [longitude, latitude] // lon, lat
       );
-      
-      location = locationRows[0].location;
 
-    } else {
-      return res.status(403).json({ error: 'Invalid user role' });
+      location = locRows[0].location;
+      department = null;
+    }
+    else {
+      return res.status(403).json({ error: "Invalid user role" });
     }
 
     const radiusMeters = radiusKm * 1000;
 
-    const { rows: countRows } = await pool.query(
-      `SELECT COUNT(*) as total
-       FROM issues
-       WHERE department = $1
-         AND ST_DWithin(location::geography, $2::geography, $3)`,
-      [department, location, radiusMeters]
-    );
+    let countQuery;
+    let countParams;
 
-    const { rows: issues } = await pool.query(
-  `SELECT 
-     *,
-     ST_Distance(location::geography, $1::geography) AS distance_meters,
-     ROUND((ST_Distance(location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km
-   FROM issues
-   WHERE department = $2
-     AND ST_DWithin(location::geography, $1::geography, $3)
-   ORDER BY location <-> $1
-   LIMIT $4 OFFSET $5`,
-  [location, department, radiusMeters, limit, offset]
-);
+    if (department) {
+      countQuery = `
+        SELECT COUNT(*) AS total
+        FROM issues
+        WHERE department = $1
+          AND ST_DWithin(location::geography, $2::geography, $3)
+      `;
+      countParams = [department, location, radiusMeters];
+    } else {
+      countQuery = `
+        SELECT COUNT(*) AS total
+        FROM issues
+        WHERE ST_DWithin(location::geography, $1::geography, $2)
+      `;
+      countParams = [location, radiusMeters];
+    }
+
+    const { rows: countRows } = await pool.query(countQuery, countParams);
+
+    const total = parseInt(countRows[0].total);
 
 
+    let issueQuery;
+    let issueParams;
+
+    if (department) {
+      issueQuery = `
+        SELECT
+          *,
+          ST_Distance(location::geography, $1::geography) AS distance_meters,
+          ROUND((ST_Distance(location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km
+        FROM issues
+        WHERE department = $2
+          AND ST_DWithin(location::geography, $1::geography, $3)
+        ORDER BY location <-> $1
+        LIMIT $4 OFFSET $5
+      `;
+      issueParams = [location, department, radiusMeters, limit, offset];
+    } else {
+      issueQuery = `
+        SELECT
+          *,
+          ST_Distance(location::geography, $1::geography) AS distance_meters,
+          ROUND((ST_Distance(location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km
+        FROM issues
+        WHERE ST_DWithin(location::geography, $1::geography, $2)
+        ORDER BY location <-> $1
+        LIMIT $3 OFFSET $4
+      `;
+      issueParams = [location, radiusMeters, limit, offset];
+    }
+
+    const { rows: issues } = await pool.query(issueQuery, issueParams);
     res.json({
       issues,
-      total: parseInt(countRows[0].total),
+      total,
       limit,
       offset,
-      hasMore: offset + issues.length < parseInt(countRows[0].total)
+      hasMore: offset + issues.length < total,
     });
 
   } catch (err: any) {
     console.error(err);
-    res.status(500).json({ 
-      error: 'Failed to fetch nearby issues', 
-      details: err.message 
+    res.status(500).json({
+      error: "Failed to fetch nearby issues",
+      details: err.message,
     });
   }
 }
+
 
 // Issues for higher authority by department
 export async function getDepartmentIssues(req: Request, res: Response) {
