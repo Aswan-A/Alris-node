@@ -66,17 +66,18 @@ export async function getNearbyIssues(req: Request, res: Response) {
     );
 
     const { rows: issues } = await pool.query(
-      `SELECT 
-         *,
-         ST_Distance(location::geography, $1::geography) AS distance_meters,
-         ROUND(ST_Distance(location::geography, $1::geography) / 1000, 2) AS distance_km
-       FROM issues
-       WHERE department = $2
-         AND ST_DWithin(location::geography, $1::geography, $3)
-       ORDER BY location <-> $1
-       LIMIT $4 OFFSET $5`,
-      [location, department, radiusMeters, limit, offset]
-    );
+  `SELECT 
+     *,
+     ST_Distance(location::geography, $1::geography) AS distance_meters,
+     ROUND((ST_Distance(location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km
+   FROM issues
+   WHERE department = $2
+     AND ST_DWithin(location::geography, $1::geography, $3)
+   ORDER BY location <-> $1
+   LIMIT $4 OFFSET $5`,
+  [location, department, radiusMeters, limit, offset]
+);
+
 
     res.json({
       issues,
