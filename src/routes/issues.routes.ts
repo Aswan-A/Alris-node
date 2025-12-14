@@ -4,6 +4,7 @@ import { requireRole } from "../middleware/roles.js";
 import {
   getNearbyIssues,
   getDepartmentIssues,
+  getIssueById,
   updateIssueStatus,
 } from "../controllers/issues.controller.js";
 
@@ -15,12 +16,26 @@ router.post(
   requireRole("citizen", "authority"),
   getNearbyIssues
 );
+
 router.get(
   "/department",
   authMiddleware,
   requireRole("higher"),
   getDepartmentIssues
 );
-router.put("/status", authMiddleware,requireRole("higher", "authority"), updateIssueStatus);
+
+router.get(
+  "/:issueId",
+  authMiddleware,
+  requireRole("citizen", "authority", "higher"),
+  getIssueById
+);
+
+router.put(
+  "/status",
+  authMiddleware,
+  requireRole("higher", "authority"),
+  updateIssueStatus
+);
 
 export default router;

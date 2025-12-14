@@ -15,7 +15,6 @@ export async function getNearbyIssues(req: Request, res: Response) {
   let department: string | null = null;
 
   try {
- 
     if (userRole === "authority") {
       const { rows: authRows } = await pool.query(
         `SELECT location, department FROM authorities WHERE id=$1`,
@@ -29,8 +28,6 @@ export async function getNearbyIssues(req: Request, res: Response) {
       location = authRows[0].location; 
       department = authRows[0].department;
     }
-
- 
     else if (userRole === "citizen") {
       const { latitude, longitude } = req.body;
 
@@ -42,7 +39,7 @@ export async function getNearbyIssues(req: Request, res: Response) {
 
       const { rows: locRows } = await pool.query(
         `SELECT ST_SetSRID(ST_MakePoint($1, $2), 4326) AS location`,
-        [longitude, latitude] // lon, lat
+        [longitude, latitude]
       );
 
       location = locRows[0].location;
@@ -75,9 +72,7 @@ export async function getNearbyIssues(req: Request, res: Response) {
     }
 
     const { rows: countRows } = await pool.query(countQuery, countParams);
-
     const total = parseInt(countRows[0].total);
-
 
     let issueQuery;
     let issueParams;
@@ -85,31 +80,100 @@ export async function getNearbyIssues(req: Request, res: Response) {
     if (department) {
       issueQuery = `
         SELECT
-          *,
-          ST_Distance(location::geography, $1::geography) AS distance_meters,
-          ROUND((ST_Distance(location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km
-        FROM issues
-        WHERE department = $2
-          AND ST_DWithin(location::geography, $1::geography, $3)
-        ORDER BY location <-> $1
+          i.id AS issue_id,
+          i.latitude,
+          i.longitude,
+          i.category,
+          i.department,
+          i.status,
+          i.created_at,
+          i.updated_at,
+          ST_Distance(i.location::geography, $1::geography) AS distance_meters,
+          ROUND((ST_Distance(i.location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'report_id', r.id,
+                'user_id', r.user_id,
+                'description', r.description,
+                'created_at', r.created_at,
+                'uploads', (
+                  SELECT COALESCE(
+                    json_agg(
+                      json_build_object(
+                        'id', ru.id,
+                        'url', ru.filename,
+                        'uploaded_at', ru.uploaded_at,
+                        'is_fake', ru.is_fake,
+                        'is_spam', ru.is_spam
+                      )
+                    ), '[]'::json
+                  )
+                  FROM report_uploads ru
+                  WHERE ru.report_id = r.id
+                )
+              )
+            ) FILTER (WHERE r.id IS NOT NULL), '[]'
+          ) AS reports
+        FROM issues i
+        LEFT JOIN reports r ON r.issue_id = i.id AND r.is_classified = true
+        WHERE i.department = $2
+          AND ST_DWithin(i.location::geography, $1::geography, $3)
+        GROUP BY i.id
+        ORDER BY i.location <-> $1
         LIMIT $4 OFFSET $5
       `;
       issueParams = [location, department, radiusMeters, limit, offset];
     } else {
       issueQuery = `
         SELECT
-          *,
-          ST_Distance(location::geography, $1::geography) AS distance_meters,
-          ROUND((ST_Distance(location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km
-        FROM issues
-        WHERE ST_DWithin(location::geography, $1::geography, $2)
-        ORDER BY location <-> $1
+          i.id AS issue_id,
+          i.latitude,
+          i.longitude,
+          i.category,
+          i.department,
+          i.status,
+          i.created_at,
+          i.updated_at,
+          ST_Distance(i.location::geography, $1::geography) AS distance_meters,
+          ROUND((ST_Distance(i.location::geography, $1::geography) / 1000)::numeric, 2) AS distance_km,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'report_id', r.id,
+                'user_id', r.user_id,
+                'description', r.description,
+                'created_at', r.created_at,
+                'uploads', (
+                  SELECT COALESCE(
+                    json_agg(
+                      json_build_object(
+                        'id', ru.id,
+                        'url', ru.filename,
+                        'uploaded_at', ru.uploaded_at,
+                        'is_fake', ru.is_fake,
+                        'is_spam', ru.is_spam
+                      )
+                    ), '[]'::json
+                  )
+                  FROM report_uploads ru
+                  WHERE ru.report_id = r.id
+                )
+              )
+            ) FILTER (WHERE r.id IS NOT NULL), '[]'
+          ) AS reports
+        FROM issues i
+        LEFT JOIN reports r ON r.issue_id = i.id AND r.is_classified = true
+        WHERE ST_DWithin(i.location::geography, $1::geography, $2)
+        GROUP BY i.id
+        ORDER BY i.location <-> $1
         LIMIT $3 OFFSET $4
       `;
       issueParams = [location, radiusMeters, limit, offset];
     }
 
     const { rows: issues } = await pool.query(issueQuery, issueParams);
+    
     res.json({
       issues,
       total,
@@ -142,19 +206,25 @@ export async function getDepartmentIssues(req: Request, res: Response) {
       `
       SELECT 
         i.id AS issue_id,
-        i.latitude AS issue_latitude,
-        i.longitude AS issue_longitude,
-        i.status,
+        i.latitude,
+        i.longitude,
         i.category,
+        i.department,
+        i.status,
+        i.created_at,
+        i.updated_at,
         COALESCE(
           json_agg(
             json_build_object(
               'report_id', r.id,
+              'user_id', r.user_id,
               'description', r.description,
+              'created_at', r.created_at,
               'uploads', (
                 SELECT COALESCE(
                   json_agg(
                     json_build_object(
+                      'id', ru.id,
                       'url', ru.filename,
                       'uploaded_at', ru.uploaded_at,
                       'is_fake', ru.is_fake,
@@ -181,6 +251,78 @@ export async function getDepartmentIssues(req: Request, res: Response) {
   } catch (err: any) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch issues', details: err.message });
+  }
+}
+
+
+// Get single issue details by ID
+export async function getIssueById(req: Request, res: Response) {
+  try {
+    const { issueId } = req.params;
+    const user = (req as any).user;
+
+    if (!issueId) {
+      return res.status(400).json({ error: 'Issue ID is required' });
+    }
+
+    // Query to get issue with all its reports and uploads
+    const { rows } = await pool.query(
+      `
+      SELECT 
+        i.id AS issue_id,
+        i.latitude,
+        i.longitude,
+        i.category,
+        i.department,
+        i.status,
+        i.created_at,
+        i.updated_at,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'report_id', r.id,
+              'user_id', r.user_id,
+              'description', r.description,
+              'latitude', r.latitude,
+              'longitude', r.longitude,
+              'created_at', r.created_at,
+              'uploads', (
+                SELECT COALESCE(
+                  json_agg(
+                    json_build_object(
+                      'id', ru.id,
+                      'url', ru.filename,
+                      'uploaded_at', ru.uploaded_at,
+                      'is_fake', ru.is_fake,
+                      'is_spam', ru.is_spam
+                    )
+                  ), '[]'::json
+                )
+                FROM report_uploads ru
+                WHERE ru.report_id = r.id
+              )
+            )
+          ) FILTER (WHERE r.id IS NOT NULL), '[]'
+        ) AS reports
+      FROM issues i
+      LEFT JOIN reports r ON r.issue_id = i.id AND r.is_classified = true
+      WHERE i.id = $1
+      GROUP BY i.id;
+      `,
+      [issueId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+
+    res.json({ issue: rows[0] });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ 
+      error: 'Failed to fetch issue details', 
+      details: err.message 
+    });
   }
 }
 
