@@ -6,11 +6,13 @@ import {
   getDepartmentIssues,
   getIssueById,
   updateIssueStatus,
+  upvoteIssue,
+  removeUpvote,
 } from "../controllers/issues.controller.js";
 
 const router = Router();
 
-router.post(
+router.get(
   "/nearby",
   authMiddleware,
   requireRole("citizen", "authority"),
@@ -36,6 +38,20 @@ router.put(
   authMiddleware,
   requireRole("higher", "authority"),
   updateIssueStatus
+);
+
+router.post(
+  "/:issueId/upvote",
+  authMiddleware,
+  requireRole("citizen"),
+  upvoteIssue
+);
+
+router.delete(
+  "/:issueId/upvote",
+  authMiddleware,
+  requireRole("citizen"),
+  removeUpvote
 );
 
 export default router;

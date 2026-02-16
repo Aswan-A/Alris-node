@@ -1,151 +1,269 @@
-import type { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
-import { pool } from '../config/db.js';
-import { generateAccessToken, generateRefreshToken } from '../utils/jwt.js';
+import type { Request, Response } from "express";
+import bcrypt from "bcrypt";
+import { eq } from "drizzle-orm";
+import { db } from "../config/db.js";
+import {
+  authorities,
+  higherAuthorities,
+  refreshTokens,
+  auditLogs,
+} from "../database/schema.js";
+import { generateAccessToken, generateRefreshToken } from "../utils/jwt.js";
+import { asyncHandler } from "../middleware/error-handler.js";
 
+// ─── Register Lower Authority (by Higher Authority) ─────────────────────────
 
-/**
- * Higher authority registers lower authority
- * Only email is provided, password generated automatically
- */
-export async function registerLowerAuthority(req: Request, res: Response) {
-  const { email } = req.body;
-  const user = (req as any).user; 
-  const department = user?.department;
+export const registerLowerAuthority = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { email } = req.body;
+    const user = req.user!;
+    const department = user.department;
 
-  if (!email) {
-    return res.status(400).json({ error: 'Email is required' });
-  }
-  if (!department) {
-    return res.status(400).json({ error: 'Department missing from higher authority token' });
-  }
+    if (!email) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Email is required" });
+    }
+    if (!department) {
+      return res.status(400).json({
+        success: false,
+        error: "Department missing from higher authority token",
+      });
+    }
 
-  try {
-    // Generate password from first 6 letters of email
+    // Generate temp password from first 6 chars of email
     let tempPassword = email.slice(0, 6);
     if (tempPassword.length < 6) {
-      tempPassword = tempPassword.padEnd(6, '0');
+      tempPassword = tempPassword.padEnd(6, "0");
     }
 
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
 
-    const { rows } = await pool.query(
-      `INSERT INTO authorities (email, password_hash, department)
-       VALUES ($1, $2, $3)
-       RETURNING id, email, department`,
-      [email, hashedPassword, department]
-    );
+    const [authority] = await db
+      .insert(authorities)
+      .values({ email, passwordHash, department })
+      .returning({
+        id: authorities.id,
+        email: authorities.email,
+        department: authorities.department,
+      });
+
+    // Audit log
+    await db.insert(auditLogs).values({
+      actorId: user.id,
+      actorRole: user.role,
+      action: "authority_registered",
+      entityType: "authority",
+      entityId: authority!.id,
+      metadata: JSON.stringify({ department }),
+    });
 
     res.status(201).json({
-      message: 'Lower authority registered successfully',
-      authority: rows[0],
-      tempPassword, // return so higher authority can share with them
-    });
-  } catch (err: any) {
-    res.status(400).json({
-      error: 'Error registering lower authority',
-      details: err.message,
+      success: true,
+      data: { authority, tempPassword },
+      message: "Lower authority registered successfully",
     });
   }
-}
+);
 
+// ─── Authority Login (Higher or Lower) ──────────────────────────────────────
 
-/**
- * Authority login (lower or higher)
- * Lower authority also gets is_initialized flag
- */
-export async function loginAuthority(req: Request, res: Response) {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
-  }
+export const loginAuthority = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { email, password } = req.body;
 
-  try {
-    let query = `SELECT id, email, password_hash, department FROM higherauthorities WHERE email = $1`;
-    let { rows } = await pool.query(query, [email]);
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Email and password are required" });
+    }
 
-    let role: 'higher' | 'authority' | null = null;
-    let user = rows[0];
+    // Try higher authority first
+    let [higherAuth] = await db
+      .select()
+      .from(higherAuthorities)
+      .where(eq(higherAuthorities.email, email))
+      .limit(1);
 
-    if (user) {
-      role = 'higher';
+    let role: "higher" | "authority";
+    let foundUser: any;
+
+    if (higherAuth) {
+      role = "higher";
+      foundUser = higherAuth;
     } else {
-      query = `SELECT id, email, password_hash, department, is_initialized FROM authorities WHERE email = $1`;
-      ({ rows } = await pool.query(query, [email]));
-      user = rows[0];
-      if (user) role = 'authority';
+      const [auth] = await db
+        .select()
+        .from(authorities)
+        .where(eq(authorities.email, email))
+        .limit(1);
+
+      if (!auth) {
+        return res
+          .status(401)
+          .json({ success: false, error: "Invalid email or password" });
+      }
+      role = "authority";
+      foundUser = auth;
     }
 
-    if (!user || !role) {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
-
-    const valid = await bcrypt.compare(password, user.password_hash);
+    const valid = await bcrypt.compare(password, foundUser.passwordHash);
     if (!valid) {
-      return res.status(401).json({ error: 'Invalid email or password' });
+      return res
+        .status(401)
+        .json({ success: false, error: "Invalid email or password" });
     }
 
-    const payload = { id: user.id, role, department: user.department };
+    const payload = {
+      id: foundUser.id,
+      email: foundUser.email,
+      role,
+      department: foundUser.department,
+    };
     const accessToken = generateAccessToken(payload);
-    const refreshToken = generateRefreshToken(payload);
+    const refreshTkn = generateRefreshToken(payload);
 
-    await pool.query(
-      `INSERT INTO refresh_tokens (user_id, token) VALUES ($1, $2)`,
-      [user.id, refreshToken]
-    );
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await db
+      .insert(refreshTokens)
+      .values({ userId: foundUser.id, token: refreshTkn, expiresAt });
 
     res.json({
-      message: 'Login successful',
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        role,
-        department: user.department,
-        is_initialized: role === 'authority' ? user.is_initialized : undefined, // ADDED
+      success: true,
+      data: {
+        accessToken,
+        refreshToken: refreshTkn,
+        user: {
+          id: foundUser.id,
+          email: foundUser.email,
+          role,
+          department: foundUser.department,
+          isInitialized:
+            role === "authority" ? foundUser.isInitialized : undefined,
+        },
       },
     });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Login error', details: err.message });
   }
-}
+);
 
+// ─── Update Authority Profile ───────────────────────────────────────────────
 
-/**
- * Lower authority updates profile and password
- * After update, is_initialized = true
- */
-export async function updateAuthorityProfile(req: Request, res: Response) {
-  const user = (req as any).user;
-  const { id } = user;
-  // CHANGED: Removed department from destructuring
-  const { name, phone, latitude, longitude, newPassword } = req.body;
+export const updateAuthorityProfile = asyncHandler(
+  async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const { name, phone, latitude, longitude, newPassword } = req.body;
 
-  try {
-    let hashedPassword: string | undefined;
+    let passwordHash: string | undefined;
     if (newPassword) {
-      hashedPassword = await bcrypt.hash(newPassword, 10);
+      passwordHash = await bcrypt.hash(newPassword, 12);
     }
 
-    const { rows } = await pool.query(
-      `UPDATE authorities
-       SET name = COALESCE($1, name),
-           phone = COALESCE($2, phone),
-           latitude = COALESCE($3, latitude),
-           longitude = COALESCE($4, longitude),
-           location = ST_SetSRID(ST_MakePoint(COALESCE($4, longitude), COALESCE($3, latitude)), 4326),
-           password_hash = COALESCE($5, password_hash),
-           is_initialized = true
-       WHERE id = $6
-       RETURNING id, name, email, department, latitude, longitude, is_initialized`,
-      [name, phone, latitude, longitude, hashedPassword, id]
-    );
+    // Build update object
+    const updateData: any = { isInitialized: true, updatedAt: new Date() };
+    if (name) updateData.name = name;
+    if (phone) updateData.phone = phone;
+    if (latitude !== undefined) updateData.latitude = latitude;
+    if (longitude !== undefined) updateData.longitude = longitude;
+    if (passwordHash) updateData.passwordHash = passwordHash;
 
-    if (rows.length === 0) return res.status(404).json({ error: 'Authority not found' });
+    const [updated] = await db
+      .update(authorities)
+      .set(updateData)
+      .where(eq(authorities.id, userId))
+      .returning({
+        id: authorities.id,
+        name: authorities.name,
+        email: authorities.email,
+        department: authorities.department,
+        latitude: authorities.latitude,
+        longitude: authorities.longitude,
+        isInitialized: authorities.isInitialized,
+      });
 
-    res.json({ message: 'Profile updated successfully', authority: rows[0] });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Error updating profile', details: err.message });
+    if (!updated) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Authority not found" });
+    }
+
+    // Update PostGIS location column via raw SQL
+    if (latitude !== undefined && longitude !== undefined) {
+      const { pool } = await import("../config/db.js");
+      await pool.query(
+        `UPDATE authorities SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326) WHERE id = $3`,
+        [longitude, latitude, userId]
+      );
+    }
+
+    // Audit log
+    await db.insert(auditLogs).values({
+      actorId: userId,
+      actorRole: "authority",
+      action: "authority_profile_updated",
+      entityType: "authority",
+      entityId: userId,
+    });
+
+    res.json({
+      success: true,
+      data: updated,
+      message: "Profile updated successfully",
+    });
   }
-}
+);
+
+// ─── Get Authority Profile ──────────────────────────────────────────────────
+
+export const getAuthorityProfile = asyncHandler(
+  async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const role = req.user!.role;
+
+    if (role === "higher") {
+      const [profile] = await db
+        .select({
+          id: higherAuthorities.id,
+          name: higherAuthorities.name,
+          email: higherAuthorities.email,
+          phone: higherAuthorities.phone,
+          department: higherAuthorities.department,
+          createdAt: higherAuthorities.createdAt,
+        })
+        .from(higherAuthorities)
+        .where(eq(higherAuthorities.id, userId))
+        .limit(1);
+
+      if (!profile) {
+        return res
+          .status(404)
+          .json({ success: false, error: "Profile not found" });
+      }
+
+      return res.json({ success: true, data: { ...profile, role: "higher" } });
+    }
+
+    const [profile] = await db
+      .select({
+        id: authorities.id,
+        name: authorities.name,
+        email: authorities.email,
+        phone: authorities.phone,
+        department: authorities.department,
+        latitude: authorities.latitude,
+        longitude: authorities.longitude,
+        isInitialized: authorities.isInitialized,
+        createdAt: authorities.createdAt,
+      })
+      .from(authorities)
+      .where(eq(authorities.id, userId))
+      .limit(1);
+
+    if (!profile) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Profile not found" });
+    }
+
+    res.json({ success: true, data: { ...profile, role: "authority" } });
+  }
+);
